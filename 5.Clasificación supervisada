@@ -1,0 +1,61 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var  landsatTOAcloudmask = cloud_masks.landsatTOA (options);
+
+//Año actual 
+var landsatCollection = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     //.map(addNDVI_L08)
+                     .median()
+                     .clip(Ocaso)
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(landsatCollection,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+
+  Map.centerObject( Ocaso,12);
+  
+// Fusionar los puntos
+var newfc = urban.merge(forest).merge(cropland).merge(grassland);
+print(newfc, 'newfc')
+
+// Selecciona las bandas para el entrenamiento
+var bands = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
+
+// Muestre las imágenes de entrada para obtener una FeatureCollection de datos de entrenamiento.
+var training = landsatCollection.select(bands).sampleRegions({
+  collection: newfc,
+  properties: ['landcover'],
+  scale: 30
+});
+// Haz un clasificador de Random Forest y entrénalo.
+var classifier = ee.Classifier.randomForest().train({
+  features: training,
+  classProperty: 'landcover',
+  inputProperties: bands
+ });
+ 
+// Clasificar las imágenes de entrada.
+var classified = landsatCollection.select(bands).classify(classifier);
+
+// Definir una paleta para la clasificación del uso de la tierra.
+var palette = [
+  'D3D3D3', // urban (0)  // grey
+  '#e9aa2b', // cropland (1)  // café
+  '#2aa326', //  forest (2) // green
+  '#bcff45' //  grassland (3) // green
+];
+
+// Muestra el resultado de la clasificación y la imagen de entrada.
+Map.centerObject( Ocaso,12);
+Map.addLayer(classified, {min: 0, max: 2, palette: palette}, 'Land Use Classification');
