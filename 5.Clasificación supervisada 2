@@ -1,0 +1,64 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var  landsatTOAcloudmask = cloud_masks.landsatTOA (options);
+
+//Año actual 
+var landsatCollection = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     //.map(addNDVI_L08)
+                     .median()
+                     .clip(Ocaso)
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(landsatCollection,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+
+  Map.centerObject( Ocaso,12);
+  
+// Fusionar los puntos
+var newfc = urban.merge(forest).merge(cropland).merge(grassland);
+print(newfc, 'newfc');
+
+var training= landsatCollection.sampleRegions(newfc,['landcover'],30);
+
+print(training.size());
+var bands = ['B2','B3', 'B4', 'B5', 'B6','B7', 'B10', 'B11'];
+var classifier = ee.Classifier.smileRandomForest(10).train(training,'landcover',bands);
+var classified = landsatCollection.classify(classifier);
+
+// Definir una paleta para la clasificación del uso de la tierra.
+var palette = [
+  '#ff02da', // urban (0)  // VIOLETA
+  '#8f6827', // cropland (1)  // café
+  '#2aa326', //  forest (2) // green
+  '#bcff45' //  grassland (3) // green CLARO
+];
+
+// Muestra el resultado de la clasificación y la imagen de entrada.
+Map.addLayer(classified, {min: 0, max: 3, palette: palette}, 'Land Use Classification');
+
+//Merge into one FeatureCollection
+var valNames = vUrban.merge(vForest).merge(vCropland).merge(vGrassland);
+var validation = classified.sampleRegions({
+  collection: valNames,
+  properties: ['landcover'],
+  scale: 30,
+});
+print(validation);
+
+//Compare the landcover of your validation data against the classification result
+var testAccuracy = validation.errorMatrix('landcover', 'classification');
+//Print the error matrix to the console
+print('Validation error matrix: ', testAccuracy);
+//Print the overall accuracy to the console
+print('Validation overall accuracy: ', testAccuracy.accuracy());
