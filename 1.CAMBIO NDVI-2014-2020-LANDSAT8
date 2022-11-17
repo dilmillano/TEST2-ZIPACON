@@ -1,0 +1,96 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var  landsatTOAcloudmask = cloud_masks.landsatTOA (options);
+
+//Cálculo de NDVI
+function addNDVI_L08(img) {
+  img = ee.Image(img) ;
+  var ndvi = img.normalizedDifference(['B5', 'B4']).rename(['ndvi']);
+  var img_ndvi = img.addBands(ndvi);
+  return img_ndvi;
+}
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addNDVI_L08)
+                     .median()
+                     
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+  
+//Año inicial
+  var OcasoSR_L05 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2014-01-01","2015-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addNDVI_L08)
+                     .median()
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L05.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 1-2014');
+  
+  var cambio=OcasoSR_L08.select('ndvi').subtract(OcasoSR_L05.select('ndvi'));
+
+var noCambio = cambio.eq(0);
+var cambioPositivo = cambio.gt(0);
+var cambioNegativo = cambio.lt(0);
+
+//Mascaras
+var mascara_noCambio= noCambio
+          .updateMask(noCambio);
+var mascara_cambioPositivo=cambioPositivo
+         .updateMask(cambioPositivo);
+var mascara_cambioNegativo=cambioNegativo
+         .updateMask(cambioNegativo);    
+
+var mosaic = ee.ImageCollection
+([mascara_noCambio.visualize({palette: ['white']}),
+mascara_cambioPositivo.visualize({palette: ['#51b430']}),
+mascara_cambioNegativo.visualize({palette: ['#f3ed3c']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.addLayer(cambio.clip(Ocaso),{palette:['red','white','green']},'cambio');
+  
+  Map.centerObject( Ocaso,10);
+  
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000)
+
+
+var mascara_noCambio_ = mascara_noCambio.multiply(area).select([0],['No Cambio']);
+var mascara_cambioPositivo_ = mascara_cambioPositivo.updateMask(mascara_cambioPositivo).multiply(area).select([0],['Cambio positivo']);
+var mascara_cambioNegativo_ = mascara_cambioNegativo.updateMask(mascara_cambioNegativo).multiply(area).select([0],['Cambio negativo']);
+
+var area_image = mascara_noCambio_.addBands(mascara_cambioPositivo_)
+                                  .addBands(mascara_cambioNegativo_)
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
+//print('coberturas')
+//print(areas.get('Cambio negativo').getInfo()+areas.get('Cambio positivo').getInfo())
+//print("area del shape ")
+//print(Ocaso.geometry().area().divide(10000))
