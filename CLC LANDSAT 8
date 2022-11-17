@@ -1,0 +1,86 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+Map.centerObject( Ocaso,15);
+//Cálculo de NDVI
+function addNDVI_L08(img) {
+  img = ee.Image(img) ;
+  var ndvi = img.normalizedDifference(['B5', 'B4']).rename(['ndvi']);
+  var img_ndvi = img.addBands(ndvi);
+  return img_ndvi;
+}
+
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var landsatSRfunction = cloud_masks.landsatSR(options)
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2021-12-31")
+                     .map(landsatSRfunction)
+                     .map(addNDVI_L08)
+                     .median()
+
+                     ;
+  
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 3000,
+  gamma: 1,bands:['B4','B3','B2']},'Año 2-2020',false);
+
+OcasoSR_L08= OcasoSR_L08.select('ndvi');
+
+Map.addLayer(OcasoSR_L08.clip(Ocaso),{palette:["red", "black","yellow", "green"],min:0, max:0.8 }, 'NDVI 2016', false);
+
+var urban = OcasoSR_L08.lte(0.5);
+var urbanDis = OcasoSR_L08.gt(0.5).and(OcasoSR_L08.lte(0.65));
+var cropland = OcasoSR_L08.gt(0.65).and(OcasoSR_L08.lte(0.7));
+var vegetation = OcasoSR_L08.gt(0.7).and(OcasoSR_L08.lte(0.75));
+var forest = OcasoSR_L08.gt(0.75);
+
+//Mascaras
+var mascara_urban= urban
+          .updateMask(urban);
+var mascara_urbanDis=urbanDis
+         .updateMask(urbanDis);    
+var mascara_cropland=cropland
+         .updateMask(cropland);  
+var mascara_vegetation=vegetation
+         .updateMask(vegetation);
+var mascara_forest=forest
+         .updateMask(forest);  
+         
+         
+var mosaic = ee.ImageCollection
+([mascara_urban.visualize({palette: ['red']}),
+ mascara_urbanDis.visualize({palette: ['yellow']}),
+mascara_cropland.visualize({palette: ['#c6ffcd']}),
+mascara_vegetation.visualize({palette: ['#ff76f4']}), //morado vegetación secundaria
+mascara_forest.visualize({palette: ['green']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico',false);
+
+Map.centerObject( Ocaso,15);
+
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000);
+
+mascara_urban = mascara_urban.multiply(area).select([0],['Tejido landcover2-rojo']);
+mascara_urbanDis = mascara_urbanDis.multiply(area).select([0],['Tejido landcover2 Discontinuo-amarillo ']);
+mascara_cropland = mascara_cropland.multiply(area).select([0],['Bosque fragmentado con cultivos y pastos-verde claro']);
+mascara_vegetation = mascara_vegetation.multiply(area).select([0],['Bosque fragmentado con Vegetación secundaria-morado']);
+mascara_forest = mascara_forest.multiply(area).select([0],['Bosque']);
+
+var area_image = mascara_urban
+                .addBands(mascara_urbanDis)
+                .addBands(mascara_cropland)
+                .addBands(mascara_vegetation)
+                .addBands(mascara_forest);
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+});
+print(areas);
