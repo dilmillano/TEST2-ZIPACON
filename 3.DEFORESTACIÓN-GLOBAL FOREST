@@ -1,0 +1,36 @@
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+//var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+//var Ocaso2= ee.FeatureCollection('users/dilmillano/mygeodata');
+Map.centerObject(Ocaso, 15);
+var globalforest = ee.Image("UMD/hansen/global_forest_change_2020_v1_8"); 
+var vizLoss = {
+  //un cambio de un estado forestal a un estado no forestal
+  bands: ['loss'],
+  min: 0,
+  max: 1,
+  palette: [
+    "green","red"
+  ]
+};
+
+Map.addLayer(globalforest.clip(Ocaso),vizLoss, 'Deforestación')
+Map.addLayer(Ocaso,{color: 'FFFFFF80'}, 'Sector Ocaso',false)
+//Declaración de perdidas
+var loss = globalforest.select('loss').eq(1);
+
+//Mascaras
+var mascara_loss= loss
+          .updateMask(loss);
+          
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000)
+
+var mascara_loss_ = mascara_loss.multiply(area).select([0],['Deforestación']);
+
+var areas = mascara_loss_.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
