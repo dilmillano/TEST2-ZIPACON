@@ -1,0 +1,118 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var  landsatTOAcloudmask = cloud_masks.landsatTOA (options);
+
+//Cálculo de bsi
+function addbsi_L08(img) {
+  img = ee.Image(img) ;
+ // var bsi = img.normalizedDifference(['B5', 'B4']).rename(['bsi']);
+  var bsi = img.expression('(float(Red+SWIR)-float(NIR+Blue))/(float(Red+SWIR)+float(NIR+Blue))',{
+            'Red':img.select('B4'),
+            'SWIR':img.select('B6'),
+            'NIR':img.select('B5'),
+            'Blue':img.select('B2'),
+  }).rename(['bsi']);
+  var img_bsi = img.addBands(bsi);
+  return img_bsi;
+}
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addbsi_L08)
+                     .median()
+                     
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+  
+//Año inicial
+  var OcasoSR_L05 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2014-01-01","2015-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addbsi_L08)
+                     .median()
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L05.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 1-2014');
+  
+  var cambio=OcasoSR_L08.select('bsi').subtract(OcasoSR_L05.select('bsi'));
+//visualizar bsi
+var bsiIndex1=OcasoSR_L08.select('bsi');
+var bsiIndex2=OcasoSR_L05.select('bsi');
+
+Map.addLayer( bsiIndex1.clip(Ocaso) ,{ min: -0.6,max:0.1,palette:['green','white','red']},'bsi OCASO 2014',false);
+Map.addLayer( bsiIndex2.clip(Ocaso) ,{ min: -0.6,max:0.1,palette:['green','white','red']},'bsi OCASO 2020',false);
+Map.centerObject( Ocaso,10);
+  
+//Mascaras
+var suelo1= bsiIndex1.gte(-0.34);
+var vegetacion1 = bsiIndex1.lt(-0.34);
+
+var suelo2= bsiIndex2.gte(-0.34);
+var vegetacion2 = bsiIndex2.lt(-0.34);
+
+
+var mascara_suelo1= suelo1
+          .updateMask(suelo1);
+var mascara_vegetacion1=vegetacion1
+          .updateMask(vegetacion1);
+          
+          
+var mascara_suelo2= suelo2
+          .updateMask(suelo1);
+var mascara_vegetacion2=vegetacion2
+          .updateMask(vegetacion2);
+
+
+
+var area = ee.Image.pixelArea().divide(10000);
+
+//Calculo de área último año
+
+
+var mascara_suelo1 = mascara_suelo1.multiply(area).select([0],['Suelo-2020']);
+var mascara_vegetacion1 = mascara_vegetacion1.multiply(area).select([0],['Vegetación-2020']);
+
+var area_image = mascara_suelo1.addBands(mascara_vegetacion1);
+
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
+//Calculo de área año base
+
+var mascara_suelo2 = mascara_suelo2.multiply(area).select([0],['Suelo-2014']);
+var mascara_vegetacion2 = mascara_vegetacion2.multiply(area).select([0],['Vegetación-2014']);
+
+var area_image = mascara_suelo2.addBands(mascara_vegetacion2);
+
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
