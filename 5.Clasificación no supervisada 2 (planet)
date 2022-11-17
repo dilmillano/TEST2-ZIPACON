@@ -1,0 +1,78 @@
+var sOcaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+var ocaso=ee.Image("users/dilmillano/PLANET-ENERO2021");
+
+//var resultado=ocaso.normalizedDifference(["b4",'b3']);
+
+//Map.addLayer(resultado,{palette:["red",'white','green']},'resultado');
+
+//Map.addLayer(ocaso,{bands:["b3","b2","b1"],max:5000},'imagen natural',false);
+Map.centerObject(ocaso)
+
+
+var training=ocaso.sample({
+  region:sOcaso.geometry(),
+  scale:30,
+  numPixels:1000
+  
+  
+});
+
+var kmeans=ee.Clusterer.wekaKMeans(5).train(training);
+var resultado=ocaso.clip(sOcaso.geometry()).cluster(kmeans);
+Map.addLayer(resultado.randomVisualizer(),{},'Ramdom');
+
+//RANGOS DE CLASIFICACIÓN
+var bosque = resultado.eq(0);
+var bosquefragmentado = resultado.eq(1);
+var pastosycultivos = resultado.eq(2);
+var tejidourbandis = resultado.eq(3);
+var tejidourban = resultado.eq(4);
+
+//Mascaras
+var mascara_bosque= bosque
+          .updateMask(bosque);
+var mascara_bosquefragmentado=bosquefragmentado
+         .updateMask(bosquefragmentado);    
+var mascara_pastosycultivos=pastosycultivos
+         .updateMask(pastosycultivos);  
+var mascara_tejidourbandis=tejidourbandis
+         .updateMask(tejidourbandis);  
+var mascara_tejidourban=tejidourban
+         .updateMask(tejidourban);           
+         
+var mosaic = ee.ImageCollection
+([mascara_bosque.visualize({palette: ['#245e15']}),
+ mascara_bosquefragmentado.visualize({palette: ['#41ad27']}),
+mascara_pastosycultivos.visualize({palette: ['#ca984e']}),
+mascara_tejidourbandis.visualize({palette: ['#fffa5c']}),
+mascara_tejidourban.visualize({palette: ['#000000']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.centerObject( Ocaso,15);
+
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000);
+
+//lake_mask = lake_mask.updateMask(lake_mask)
+
+mascara_bosque = mascara_bosque.multiply(area).select([0],['Bosque']);
+mascara_bosquefragmentado = mascara_bosquefragmentado.multiply(area).select([0],['bosquefragmentado']);
+mascara_pastosycultivos = mascara_pastosycultivos.multiply(area).select([0],['pastos y cultivos']);
+mascara_tejidourbandis = mascara_tejidourbandis.multiply(area).select([0],['Tejido urbano discontinuo']);
+mascara_tejidourban = mascara_tejidourban.multiply(area).select([0],['Tejido urbano']);
+
+
+var area_image = mascara_bosque
+                .addBands(mascara_bosquefragmentado)
+                .addBands(mascara_pastosycultivos)
+                .addBands(mascara_tejidourbandis)
+                .addBands(mascara_tejidourban);
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
