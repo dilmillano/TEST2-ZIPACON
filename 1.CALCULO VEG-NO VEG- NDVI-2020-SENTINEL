@@ -1,0 +1,73 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var sentinel2function = cloud_masks.sentinel2();
+//Cálculo de ndvi
+function addndvi_L08(img) {
+  img = ee.Image(img) ;
+  var ndvi = img.normalizedDifference(['B8', 'B4']).rename(['ndvi']);
+  var img_ndvi = img.addBands(ndvi);
+  return img_ndvi;
+}
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("COPERNICUS/S2")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(sentinel2function)
+                     .map(addndvi_L08)
+                     .median()
+                     
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 5000,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+  
+OcasoSR_L08= OcasoSR_L08.select('ndvi')
+
+var vegetación = OcasoSR_L08.gt(0.2);
+var noVegetación = OcasoSR_L08.lte(0.2);
+
+//Mascaras
+var mascara_vegetación= vegetación
+          .updateMask(vegetación);
+var mascara_noVegetación=noVegetación
+         .updateMask(noVegetación);    
+
+var mosaic = ee.ImageCollection
+([mascara_vegetación.visualize({palette: ['#abcc9a']}),
+mascara_noVegetación.visualize({palette: ['#000000']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.centerObject( Ocaso,10);
+  
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000);
+
+//lake_mask = lake_mask.updateMask(lake_mask)
+
+mascara_vegetación = mascara_vegetación.multiply(area).select([0],['Vegetación']);
+mascara_noVegetación = mascara_noVegetación.multiply(area).select([0],['No Vegetación']);
+
+var area_image = mascara_vegetación
+                .addBands(mascara_noVegetación);
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
+//print('coberturas')
+//print(areas.get('Cambio negativo').getInfo()+areas.get('Cambio positivo').getInfo())
+//print("area del shape ")
+//print(Ocaso.geometry().area().divide(10000))
