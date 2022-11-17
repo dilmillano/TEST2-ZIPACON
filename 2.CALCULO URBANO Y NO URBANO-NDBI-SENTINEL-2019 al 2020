@@ -1,0 +1,79 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var sentinel2function = cloud_masks.sentinel2();
+//Cálculo de NDBI
+function addndbi_L08(img) {
+  img = ee.Image(img) ;
+  var ndbi = img.normalizedDifference(['B11', 'B8']).rename(['ndbi']);
+  var img_ndbi = img.addBands(ndbi);
+  return img_ndbi;
+}
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("COPERNICUS/S2")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(sentinel2function)
+                     .map(addndbi_L08)
+                     .median()
+                     
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 5000,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+  
+OcasoSR_L08= OcasoSR_L08.select('ndbi')
+
+var neutral = OcasoSR_L08.eq(0);
+var urbano = OcasoSR_L08.gt(0);
+var noUrbano = OcasoSR_L08.lt(0);
+
+//Mascaras
+var mascara_neutral= neutral
+          .updateMask(neutral);
+var mascara_urbano=urbano
+         .updateMask(urbano);
+var mascara_noUrbano=noUrbano
+         .updateMask(noUrbano);    
+
+var mosaic = ee.ImageCollection
+([mascara_neutral.visualize({palette: ['white']}),
+mascara_urbano.visualize({palette: ['red']}),
+mascara_noUrbano.visualize({palette: ['green']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.centerObject( Ocaso,10);
+  
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000)
+
+//lake_mask = lake_mask.updateMask(lake_mask)
+
+mascara_neutral = mascara_neutral.multiply(area).select([0],['No Cambio']);
+mascara_urbano = mascara_urbano.multiply(area).select([0],['Urbano']);
+mascara_noUrbano = mascara_noUrbano.multiply(area).select([0],['No Urbano']);
+
+var area_image = mascara_neutral.addBands(mascara_neutral)
+                                  .addBands(mascara_urbano)
+                                  .addBands(mascara_noUrbano)
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
+//print('coberturas')
+//print(areas.get('Cambio negativo').getInfo()+areas.get('Cambio positivo').getInfo())
+//print("area del shape ")
+//print(Ocaso.geometry().area().divide(10000))
