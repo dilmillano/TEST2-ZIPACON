@@ -1,0 +1,169 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/SECTOR_OCASO');
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var  landsatTOAcloudmask = cloud_masks.landsatTOA (options);
+
+//Cálculo de NDVI
+function addNDVI_L08(img) {
+  img = ee.Image(img) ;
+  var ndvi = img.normalizedDifference(['B5', 'B4']).rename(['ndvi']);
+  var img_ndvi = img.addBands(ndvi);
+  return img_ndvi;
+}
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2020-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addNDVI_L08)
+                     .median()
+                     
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 2-2020');
+  
+//Año inicial
+  var OcasoSR_L05 = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+                     .filterBounds(Ocaso)
+                     .filterDate("2014-01-01","2015-12-31")
+                     //.filterMetadata('CLOUD_COVER','less_than',20)
+                     .map(landsatTOAcloudmask)
+                     .map(addNDVI_L08)
+                     .median()
+                     //.sort('CLOUD_COVER');
+                     ;
+  
+                     
+Map.addLayer(OcasoSR_L05.clip(Ocaso) ,{ min: 0,
+  max: 0.5,
+  gamma: 1.4,bands:['B4','B3','B2']},'Año 1-2014');
+  
+  var cambio=OcasoSR_L08.select('ndvi').subtract(OcasoSR_L05.select('ndvi'));
+
+var noCambio = cambio.eq(0);
+var cambioPositivo = cambio.gt(0);
+var cambioNegativo = cambio.lt(0);
+
+//Mascaras
+var mascara_noCambio= noCambio
+          .updateMask(noCambio);
+var mascara_cambioPositivo=cambioPositivo
+         .updateMask(cambioPositivo);
+var mascara_cambioNegativo=cambioNegativo
+         .updateMask(cambioNegativo);    
+
+var mosaic = ee.ImageCollection
+([mascara_noCambio.visualize({palette: ['white']}),
+mascara_cambioPositivo.visualize({palette: ['#51b430']}),
+mascara_cambioNegativo.visualize({palette: ['#f3ed3c']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.addLayer(cambio.clip(Ocaso),{palette:['red','white','green']},'cambio');
+  
+  Map.centerObject( Ocaso,10);
+  
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000)
+
+
+var mascara_noCambio_ = mascara_noCambio.multiply(area).select([0],['No Cambio']);
+var mascara_cambioPositivo_ = mascara_cambioPositivo.updateMask(mascara_cambioPositivo).multiply(area).select([0],['Cambio positivo']);
+var mascara_cambioNegativo_ = mascara_cambioNegativo.updateMask(mascara_cambioNegativo).multiply(area).select([0],['Cambio negativo']);
+
+var area_image = mascara_noCambio_.addBands(mascara_cambioPositivo_)
+                                  .addBands(mascara_cambioNegativo_)
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
+
+
+
+///
+
+var training=OcasoSR_L08.sample({
+  region:Ocaso.geometry(),
+  scale:30,
+  numPixels:10000
+  
+  
+});
+
+var kmeans=ee.Clusterer.wekaKMeans(6).train(training);
+var resultado=OcasoSR_L08.clip(Ocaso.geometry()).cluster(kmeans);
+Map.addLayer(resultado.randomVisualizer(),{},'Ramdom');
+
+Map.centerObject(Ocaso)
+
+//RANGOS DE CLASIFICACIÓN
+var bosque = resultado.eq(1);
+var bosquefragmentado = resultado.eq(2);
+var pastosycultivos = resultado.eq(0);
+var tejidourbandis = resultado.eq(3);
+var tejidourban = resultado.eq(4);
+var bosquefragmentado2 = resultado.eq(5);
+//Mascaras
+var mascara_bosque= bosque
+          .updateMask(bosque);
+var mascara_bosquefragmentado=bosquefragmentado
+         .updateMask(bosquefragmentado);
+var mascara_bosquefragmentado2=bosquefragmentado2
+         .updateMask(bosquefragmentado2);    
+var mascara_pastosycultivos=pastosycultivos
+         .updateMask(pastosycultivos);  
+var mascara_tejidourbandis=tejidourbandis
+         .updateMask(tejidourbandis);  
+var mascara_tejidourban=tejidourban
+         .updateMask(tejidourban);           
+         
+var mosaic = ee.ImageCollection
+([mascara_bosque.visualize({palette: ['#5eff29']}),// verde fluorecente
+ mascara_bosquefragmentado.visualize({palette: ['#e4e4e4']}),// gris veg secund
+mascara_bosquefragmentado2.visualize({palette: ['#a7e4a3']}), //verde claro-pastos
+mascara_pastosycultivos.visualize({palette: ['#ffb123']}), //naranja
+mascara_tejidourbandis.visualize({palette: ['#ff3bf0']}), //rosado
+mascara_tejidourban.visualize({palette: ['#000000']}), //negro
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Mosaico');
+
+  Map.centerObject( Ocaso,15);
+
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000);
+
+//lake_mask = lake_mask.updateMask(lake_mask)
+
+mascara_bosque = mascara_bosque.multiply(area).select([0],['Bosque']);
+mascara_bosquefragmentado = mascara_bosquefragmentado.multiply(area).select([0],['bosquefragmentado pastos y cultivos']);
+mascara_bosquefragmentado2 = mascara_bosquefragmentado2.multiply(area).select([0],['bosquefragmentado vegetación secundaria']);
+mascara_pastosycultivos = mascara_pastosycultivos.multiply(area).select([0],['pastos y cultivos']);
+mascara_tejidourbandis = mascara_tejidourbandis.multiply(area).select([0],['Tejido urbano discontinuo']);
+mascara_tejidourban = mascara_tejidourban.multiply(area).select([0],['Tejido urbano']);
+
+
+var area_image = mascara_bosque
+                .addBands(mascara_bosquefragmentado)
+                .addBands(mascara_bosquefragmentado2)
+                .addBands(mascara_pastosycultivos)
+                .addBands(mascara_tejidourbandis)
+                .addBands(mascara_tejidourban);
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+})
+print(areas)
