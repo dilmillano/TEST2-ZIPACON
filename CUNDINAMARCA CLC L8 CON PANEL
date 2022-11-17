@@ -1,0 +1,335 @@
+//Importar el area de estudio
+var Ocaso= ee.FeatureCollection('users/dilmillano/CUNDINAMARCA');
+
+//Map.centerObject( Ocaso,);
+//Cálculo de NDVI
+function addNDVI_L08(img) {
+  img = ee.Image(img) ;
+  var ndvi = img.normalizedDifference(['B5', 'B4']).rename(['ndvi']);
+  var img_ndvi = img.addBands(ndvi);
+  return img_ndvi;
+}
+
+
+//Eliminar nubes y sombras 
+var cloud_masks = require('users/fitoprincipe/geetools:cloud_masks');
+var options = ["cloud","shadow"]
+var landsatSRfunction = cloud_masks.landsatSR(options)
+
+//Año actual 
+var OcasoSR_L08 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+                     .filterBounds(Ocaso)
+                     .filterDate("2019-01-01","2021-12-31")
+                     .map(landsatSRfunction)
+                     .map(addNDVI_L08)
+                     .median()
+
+                     ;
+  
+Map.addLayer(OcasoSR_L08.clip(Ocaso) ,{ min: 0,
+  max: 3000,
+  gamma: 1,bands:['B4','B3','B2']},'Año 2-2020',false);
+
+OcasoSR_L08= OcasoSR_L08.select('ndvi');
+
+Map.addLayer(OcasoSR_L08.clip(Ocaso),{palette:["red", "black","yellow", "green"],min:0, max:0.8 }, 'NDVI 2020', false);
+
+
+var urban = OcasoSR_L08.lte(0.5);
+var urbanDis = OcasoSR_L08.gt(0.5).and(OcasoSR_L08.lte(0.65));
+var cropland = OcasoSR_L08.gt(0.65).and(OcasoSR_L08.lte(0.7));
+var vegetation = OcasoSR_L08.gt(0.7).and(OcasoSR_L08.lte(0.75));
+var forest = OcasoSR_L08.gt(0.75);
+
+//Mascaras
+var mascara_urban= urban
+          .updateMask(urban);
+var mascara_urbanDis=urbanDis
+         .updateMask(urbanDis);    
+var mascara_cropland=cropland
+         .updateMask(cropland);  
+var mascara_vegetation=vegetation
+         .updateMask(vegetation);
+var mascara_forest=forest
+         .updateMask(forest);  
+         
+         
+var mosaic = ee.ImageCollection
+([mascara_urban.visualize({palette: ['red']}),
+ mascara_urbanDis.visualize({palette: ['yellow']}),
+mascara_cropland.visualize({palette: ['#ab5619']}),// café
+mascara_vegetation.visualize({palette: ['#97eb57']}), //verde claro
+mascara_forest.visualize({palette: ['green']}),
+]).mosaic();
+Map.addLayer(mosaic.clip(Ocaso),{},'Clasificación de coberturas');
+
+Map.centerObject( Ocaso,10);
+
+// Export the image, specifying scale and region.
+Export.image.toDrive({
+  image: mascara_forest.clip(Ocaso),
+  description: 'forest',
+  scale: 30,
+  region: Ocaso,
+  folder: 'EXPORT_GEE_3'
+});
+
+//Calculo de área
+var area = ee.Image.pixelArea().divide(10000);
+
+mascara_urban = mascara_urban.multiply(area).select([0],['Tejido landcover2-rojo']);
+mascara_urbanDis = mascara_urbanDis.multiply(area).select([0],['Tejido landcover2 Discontinuo-amarillo ']);
+mascara_cropland = mascara_cropland.multiply(area).select([0],['Bosque fragmentado con cultivos y pastos-verde claro']);
+mascara_vegetation = mascara_vegetation.multiply(area).select([0],['Bosque fragmentado con Vegetación secundaria-morado']);
+mascara_forest = mascara_forest.multiply(area).select([0],['Bosque']);
+
+var area_image = mascara_urban
+                .addBands(mascara_urbanDis)
+                .addBands(mascara_cropland)
+                .addBands(mascara_vegetation)
+                .addBands(mascara_forest);
+var areas = area_image.reduceRegion({
+  reducer:ee.Reducer.sum(),
+  geometry: Ocaso,
+  scale: 30,
+  maxPixels:1e13
+});
+print(areas);
+
+
+
+//CONVERT TO INT 
+mascara_urban = mascara_urban.toInt();
+mascara_urbanDis = mascara_urbanDis.toInt();
+mascara_cropland = mascara_cropland.toInt();
+mascara_vegetation = mascara_vegetation.toInt();
+mascara_forest = mascara_forest.toInt();
+
+//EXPORT TO SHAPE
+var shapeUrban = mascara_urban.reduceToVectors(
+                                     {geometry:Ocaso,
+                                      scale:3,
+                                      geometryType: 'polygon',
+                                      maxPixels: 10e7,
+                                      labelProperty: 'clasificación'
+                                     });
+
+var shapeUrbanDis = mascara_urbanDis.reduceToVectors(
+                                     {geometry:Ocaso,
+                                      scale:3,
+                                      geometryType: 'polygon',
+                                      maxPixels: 10e7,
+                                      labelProperty: 'clasificación'
+                                     });
+var shapeCropland = mascara_cropland.reduceToVectors(
+                                     {geometry:Ocaso,
+                                      scale:3,
+                                      geometryType: 'polygon',
+                                      maxPixels: 10e7,
+                                      labelProperty: 'clasificación'
+                                     });
+
+var shapeVegetation = mascara_vegetation.reduceToVectors(
+                                     {geometry:Ocaso,
+                                      scale:3,
+                                      geometryType: 'polygon',
+                                      maxPixels: 10e7,
+                                      labelProperty: 'clasificación'
+                                     });                                     
+                                     
+var shapeForest = mascara_forest.reduceToVectors(
+                                     {geometry:Ocaso,
+                                      scale:3,
+                                      geometryType: 'polygon',
+                                      maxPixels: 10e7,
+                                      labelProperty: 'clasificación'
+                                     });                                     
+                                     
+                                    
+// Export the FeatureCollection.
+
+Export.table.toDrive({
+  collection: shapeUrban,
+  description: 'Tejido Urbano2020y',
+  folder: 'EXPORT_GEE_6',
+  fileFormat: 'SHP'
+});
+
+Export.table.toDrive({
+  collection: shapeUrbanDis,
+  description: 'Tejido Urbano Discontinuo2020y',
+  folder: 'EXPORT_GEE_6',
+  fileFormat: 'SHP'
+  
+});   
+
+Export.table.toDrive({
+  collection: shapeCropland,
+  description: 'Bosque Fragmentado con Cultivosy Pastos2020y',
+  folder: 'EXPORT_GEE_6',
+  fileFormat: 'SHP'
+});
+
+Export.table.toDrive({
+  collection: shapeVegetation,
+  description: 'Bosque Fragmentado con Vegetación Secundaria2020y',
+  folder: 'EXPORT_GEE_6',
+  fileFormat: 'SHP'
+  
+}); 
+
+Export.table.toDrive({
+  collection: shapeForest,
+  description: 'Bosque2020y',
+  folder: 'EXPORT_GEE_6',
+  fileFormat: 'SHP'
+  
+}); 
+
+// Descripcion del etiquetado de elementos de la leyenda
+var Etiquetas = [
+  'Tejido Urbano=(144724.885 Ha)',
+  'Tejido Urbano Discontinuo=(365876.335 Ha) ',  
+  'Mosaico de cultivos, pastos y espacios naturales=(277168.887 Ha)',
+  'Bosque Fragmentado con vegetación secundaria=(394442.229 Ha)',
+  'Bosque Denso Bajo=(1072078.780 Ha)', 
+  ];
+
+// Configuracion del titulo y posicion de la leyenda
+var Titulo = ui.Label({
+  value: 'Coberturas para el año 2020', // Titulo de la leyenda
+  style: {fontWeight: 'bold', fontSize: '15px', margin: '0px 0px 15px 0px',}}); // Estilo y dimensiones
+var Leyenda = ui.Panel({
+  style: {position: 'bottom-right', padding: '10px 20px'}}); // Posicion, altura y anchura
+Leyenda.add(Titulo);
+
+
+// Configuracion de la simbologia
+var Simbologia = ['ff0000', 'e4ff00', 'ab5619', '97eb57', '25ba00'];
+var Simbolos = function(simbolo, texto) {
+var TextoLeyenda = ui.Label({
+  value: texto,
+  style: {margin: '3px 0px 5px 7px'}}); // Posicion en la separacion de los textos
+var CajaLeyenda = ui.Label({
+  style: {backgroundColor: '#' + simbolo,
+  padding: '7px', // TamaÃ±o del simbolo
+  margin: '0px 0px 6px 0px'}}); // Posicion en la separacion de los simbolos
+return ui.Panel({
+  widgets: [CajaLeyenda, TextoLeyenda],
+  layout: ui.Panel.Layout.Flow('horizontal')});
+};
+
+for (var i = 0; i < 5; i++) {Leyenda.add(Simbolos(Simbologia[i], Etiquetas[i]));} 
+Map.add(Leyenda);
+
+
+
+// Create an empty panel in which to arrange widgets.
+Map.style().set('cursor', 'crosshair');
+
+
+// The layout is vertical flow by default.
+var panel = ui.Panel({style: {width: '400px'}})
+    .add(ui.Label({
+  value: 'COBERTURAS DEPARTAMENTO DE CUNDINAMARCA 2020', // Titulo de la leyenda
+  style: {fontWeight: 'bold', fontSize: '25px', fontFamily: 'Cambria', margin: '0px 0px 15px 0px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Universidad Distrital Francisco José de Caldas', // Titulo de la leyenda
+  style: {fontWeight: '80', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 45px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Facultad de Medio Ambiente y Recursos Naturales', // Titulo de la leyenda
+  style: {fontWeight: '80', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 35px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Proyecto Curricular de Ingeniería Ambiental', // Titulo de la leyenda
+  style: {fontWeight: '80', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 15px 45px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Tesis: Evaluación de la afectación de coberturas a causa del desarrollo de loteos en el sector del Ocaso del municipio de Zipacón Cundinamarca', // Titulo de la leyenda
+  style: {fontWeight: '80', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 0px',textAlign: 'center', color: 'black'  }}))
+    .add(ui.Label({
+  value: 'Elaborado por: Diana Lorena Millan Orduz', // Titulo de la leyenda
+  style: {fontWeight: '80', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 15px 0px',textAlign: 'center', color: 'black'  }}))
+
+    .add(ui.Label({
+  value: 'Contenido', // Titulo de la leyenda
+  style: {fontWeight: '100', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Usted esta visualizando el mapa de cambio multitemporal de coberturas del departamento de Cundinamarca.En esta página podrá visualizar:', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'left', color: 'black'  }}))
+    .add(ui.Label({
+  value: '1.La imagen satelital libre de nubes y sombras del año 2020', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'left', color: 'black'  }}))
+    .add(ui.Label({
+  value: '2.La imagen de la clasificación de coberturas', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'left', color: 'black'  }}))
+   .add(ui.Label({
+  value: '*Nota: Para visualizar los datos solo tiene que dirijirse al icono “Layers” y en el, activar las capas que desea visualizar ', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'black'  }}))
+
+    .add(ui.Label({
+  value: 'Adicionalmente puede visualizar la gráfica del cambio del índice ndvi a través del tiempo, para esto debe seleccionar con el cursor el lugar que quiere visualizar el cambio y la gráfica cargará automaticamente', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'black'  }}))
+    .add(ui.Label({
+  value: 'En este espacio se visualizara el cambio del índice NDVI ', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'red'  }}))
+    .add(ui.Label({
+  value: 'Longitud y Latitud del punto seleccionado ', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'red'  }}))
+
+
+    .add(ui.Label({
+  value: 'Procesamiento de resultados', // Titulo de la leyenda
+  style: {fontWeight: '100', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Los resultados de las coberturas que se observan en esta página se obtuvieron mediante el análisis de las imágenes USGS Landsat 8 Surface Reflectance Tier 1 y USGS Landsat 5 Surface Reflectance Tier 1. Estas imágenes se procesaron mediante un algoritmo que permitía eliminar nubes y sombras con el objetivo de eliminar estos errores en la clasificación de coberturas. Para clasificar las coberturas se usaron los índices  NDVI (Normalized Difference Vegetation Index),NDBI ( Normalized Difference Builing Index) y BSI (Bare Soil Index), los resultados de los índices se clasificaron identificando 5 coberturas ajustadas a la clasificación de Corine Land Cover, comprobando los resultados con las coberturas identificadas en el POMCA Del Río Bogotá (Plan de Ordenación y Manejo de Cuencas Hidrográficas) y con la elaboración de una clasificación supervisada  que mediante el método de “Accuracy Assessment” se obtuvo una precisión general de validación de coberturas de 0,83.', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'black'  }}))
+
+    .add(ui.Label({
+  value: 'Acceso a los datos', // Titulo de la leyenda
+  style: {fontWeight: '100', fontSize: '15px', fontFamily: 'Cambria', margin: '0px 0px 0px 5px',textAlign: 'center', color: '#0b7891'  }}))
+    .add(ui.Label({
+  value: 'Si desea acceder al script utilizado para el procesamiento de los datos o descargar los resultados (formato SHP, CSV,GEO_JSON,KML, KMZ)  solo debe acceder al siguiente link,y logearse con su cuenta de google ', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'black'  }}))
+
+    .add(ui.Label({
+  value:'Link de acceso a datos',
+  targetUrl: 'https://code.earthengine.google.com/f22cdd785d9da7082e8ed2094421983b', 
+  style: {fontWeight: '100', fontSize: '13px', fontFamily: 'Cambria', margin: '0px 0px 15px 5px',textAlign: 'left', color: 'black'  }}))
+
+    ;
+    
+
+// Set a callback function for when the user clicks the map.
+Map.onClick(function(coords) {
+  // Create or update the location label (the second widget in the panel)
+  var location = 'lon: ' + coords.lon.toFixed(2) + ' ' +
+                 'lat: ' + coords.lat.toFixed(2);
+  panel.widgets().set(13, ui.Label(location));
+
+  // Add a red dot to the map where the user clicked.
+  var point = ee.Geometry.Point(coords.lon, coords.lat);
+  Map.layers().set(1, ui.Map.Layer(point, {color: 'FF0000'}));
+
+
+  // Create a chart of NDVI over time.
+//AÑO 2019 
+var withNDVI = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+                     .filterBounds(Ocaso)
+                     .filterDate("2014-01-01","2020-12-31")
+                     .map(landsatSRfunction)
+                     .map(addNDVI_L08)
+                     ;
+  var chart = ui.Chart.image.series(withNDVI.select('ndvi'), point, ee.Reducer.mean(), 200)
+      .setOptions({
+        title: 'NDVI Over Time',
+        vAxis: {title: 'NDVI'},
+        lineWidth: 2,
+        pointSize: 3,
+      });
+
+  // Add (or replace) the third widget in the panel by
+  // manipulating the widgets list.
+  panel.widgets().set(12, chart);
+});
+
+// Add the panel to the ui.root.
+ui.root.add(panel);
